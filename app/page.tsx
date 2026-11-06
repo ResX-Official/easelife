@@ -1,65 +1,90 @@
-import Image from "next/image";
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
+import { SectionHeading } from "@/components/landing/section-heading";
+import { prisma } from "@/lib/prisma";
+import { ListingCard } from "@/components/listing-card";
+import { Reveal } from "@/components/reveal";
+import { Hero } from "@/components/landing/hero";
+import { StatsBar } from "@/components/landing/stats-bar";
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { ExploreCities } from "@/components/landing/explore-cities";
+import { Comparison } from "@/components/landing/comparison";
+import { Collections } from "@/components/landing/collections";
+import { Faq } from "@/components/landing/faq";
+import { EscapePromo } from "@/components/landing/escape-promo";
+import { CtaBanner } from "@/components/landing/cta-banner";
 
-export default function Home() {
+export default async function Home() {
+  const [listings, listingCount, cityGroups] = await Promise.all([
+    prisma.listing.findMany({
+      where: { listingCategory: { in: ["sale", "staycation", "rent"] } },
+      orderBy: { createdAt: "desc" },
+      take: 6,
+      include: { photos: { orderBy: { order: "asc" }, take: 1 } },
+    }),
+    prisma.listing.count({ where: { listingCategory: { in: ["sale", "staycation", "rent"] } } }),
+    prisma.listing.groupBy({
+      where: { listingCategory: "staycation" },
+      by: ["city"],
+      _count: { city: true },
+      orderBy: { _count: { city: "desc" } },
+      take: 6,
+    }),
+  ]);
+
+  const cities = cityGroups.map((group) => ({
+    city: group.city,
+    count: group._count.city,
+  }));
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="home-page flex flex-col">
+      <Hero listingCount={listingCount} cityCount={cities.length} />
+
+      <StatsBar listingCount={listingCount} cityCount={cities.length} />
+
+      <Collections />
+
+      <section className="featured-section">
+        <div className="shell home-section">
+          <Reveal className="section-header">
+            <SectionHeading eyebrow="Fresh on the market" description="The latest places to rent, buy, and make your own.">
+              Homes worth <span>a closer look.</span>
+            </SectionHeading>
+            <Link href="/listings" className="text-link">Explore all listings <ArrowUpRight aria-hidden="true" className="h-4 w-4" /></Link>
+          </Reveal>
+
+          {listings.length === 0 ? (
+            <p className="text-zinc-500">
+              No listings yet.{" "}
+              <Link href="/list-property" className="font-medium text-blue-900 underline">
+                Be the first to list a property
+              </Link>
+              .
+            </p>
+          ) : (
+            <div className={`grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 ${listings.length > 2 ? "lg:grid-cols-3" : ""}`}>
+              {listings.map((listing, i) => (
+                <Reveal key={listing.id} delay={(i % 3) * 0.06}>
+                  <ListingCard listing={listing} variant="editorial" />
+                </Reveal>
+              ))}
+            </div>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      </section>
+
+      <EscapePromo />
+
+      <Comparison />
+
+      <ExploreCities cities={cities} />
+
+      <HowItWorks />
+
+      <Faq />
+
+      <CtaBanner />
     </div>
   );
 }

@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Listing {
+  id               String    @id @default(cuid())
+  managementToken  String    @unique @default(uuid())
+  title            String
+  description      String
+  price            Float
+  currency         String    @default("USD")
+  paymentFrequency String    @default("monthly")
+  listingCategory  String    @default("rent")
+  isDemo           Boolean   @default(false)
+  maxGuests        Int       @default(2)
+  vibe             String    @default("calm")
+  escapeOptions    EscapeOption[]
+  propertyType     String
+  bedrooms         Int
+  bathrooms        Int
+  city             String
+  state            String
+  address          String
+  landlordName     String
+  landlordEmail    String
+  landlordPhone    String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  photos           Photo[]
+  messages         Message[]
+}
+
+model Photo {
+  id        String  @id @default(cuid())
+  url       String
+  order     Int     @default(0)
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+}
+
+model Message {
+  id          String   @id @default(cuid())
+  senderName  String
+  senderEmail String
+  senderPhone String?
+  body        String
+  createdAt   DateTime @default(now())
+  listingId   String
+  listing     Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+}
+
+model VisitorEvent {
+  id        String   @id @default(cuid())
+  visitorId String
+  path      String
+  visitedAt DateTime @default(now())
+
+  @@index([visitedAt])
+  @@index([visitorId])
+}
+
+model SiteSetting {
+  key   String @id
+  value String
+}
+
+model EscapeRoom {
+  id          String @id @default(cuid())
+  title       String
+  hostHash    String
+  location    String @default("")
+  vibe        String @default("any")
+  currency    String @default("NGN")
+  budget      Float?
+  groupSize   Int
+  nights      Int @default(1)
+  startDate   String?
+  status      String @default("voting")
+  createdAt   DateTime @default(now())
+  options     EscapeOption[]
+  members     EscapeMember[]
+}
+
+model EscapeOption {
+  id        String @id @default(cuid())
+  roomId    String
+  listingId String
+  room      EscapeRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  votes     EscapeVote[]
+  @@unique([roomId, listingId])
+}
+
+model EscapeMember {
+  id        String @id @default(cuid())
+  roomId    String
+  name      String
+  tokenHash String @unique
+  createdAt DateTime @default(now())
+  room      EscapeRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  votes     EscapeVote[]
+  @@index([roomId])
+}
+
+model EscapeVote {
+  id       String @id @default(cuid())
+  memberId String
+  optionId String
+  value    Int
+  member   EscapeMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  option   EscapeOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  @@unique([memberId, optionId])
+}
+
+model RequestLimit {
+  key       String @id
+  count     Int    @default(0)
+  expiresAt Int
+
+  @@index([expiresAt])
+}
