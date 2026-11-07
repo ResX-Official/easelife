@@ -1,17 +1,18 @@
 import "dotenv/config";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile, unlink, stat } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
-import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { createDatabaseClient } from "../lib/database.ts";
+import { createStorageClient, storageBucket } from "../lib/supabase-storage.ts";
+import { deletePhotoObjects } from "../lib/photo-objects.ts";
 
 const origin = process.argv.find(arg=>arg.startsWith("--origin="))?.slice(9) ?? process.env.SMOKE_ORIGIN ?? "http://127.0.0.1:3000";
 const output = "/tmp/easelife-smoke";
 await mkdir(output,{recursive:true});
-const db = new PrismaClient({adapter:new PrismaBetterSqlite3({url:process.env.DATABASE_URL ?? "file:./dev.db"})});
+const db = createDatabaseClient();
 const chrome = spawn("google-chrome",["--headless","--no-sandbox","--disable-gpu","--disable-dev-shm-usage","--remote-debugging-port=0",`--user-data-dir=${output}/chrome`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
 let roomId, socket, ownerListingId;
-const ownerPhotoPaths = [];
+const ownerPhotoUrls = [];
 const delay = ms => new Promise(resolve=>setTimeout(resolve,ms));
 try {
   const wsUrl = await new Promise((resolve,reject)=>{
@@ -81,7 +82,7 @@ try {
     await wait(host,"location.pathname.startsWith('/manage/')","listing published");
     const listing = await db.listing.findFirstOrThrow({where:{title},include:{photos:true}});
     ownerListingId=listing.id;
-    ownerPhotoPaths.push(...listing.photos.map(photo=>`${process.cwd()}/public${photo.url}`));
+    ownerPhotoUrls.push(...listing.photos.map(photo=>photo.url));
     const photoStatus=await evaluate(host,`fetch(${JSON.stringify(listing.photos[0].url)}).then(r=>r.status)`);
     console.log(`CHECK newly uploaded photo HTTP ${photoStatus}`);
     assert.equal(photoStatus,200,"New uploads must be served without restarting production");
@@ -115,7 +116,8 @@ try {
     await evaluate(host,"window.confirm=()=>true;document.querySelector('details').open=true;[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Delete listing').click()");
     await wait(host,"location.pathname === '/my-listings'","listing deleted");
     assert.equal(await db.listing.findUnique({where:{id:listing.id}}),null);
-    for (const filename of ownerPhotoPaths) await assert.rejects(stat(filename), { code: "ENOENT" }, "Deleting a listing removes its uploaded photos");
+    for (const url of ownerPhotoUrls) assert.equal(await evaluate(host,`fetch(${JSON.stringify(url)},{cache:'no-store'}).then(response=>response.status)`),404,"Deleted listing photos are no longer served");
+    assert.equal(await db.storedPhoto.count({where:{filename:{in:ownerPhotoUrls.map(url=>url.split('/').pop())}}}),0,"Deleted photos release their storage allowance");
     await go(host,"/");
     assert.ok(!(await evaluate(host,"document.body.innerText")).includes(title),"Deleted listing disappears from the homepage");
     console.log("PASS private sharing, saved management links, deletion, and homepage refresh after deletion");
@@ -154,4 +156,4 @@ try {
   console.log(`PASS all smoke checks. Screenshots saved to ${output}`);
   }
 } catch(error){console.error(`FAIL ${error.message}`);process.exitCode=1;}
-finally{if(roomId)await db.escapeRoom.deleteMany({where:{id:roomId}});if(ownerListingId)await db.listing.deleteMany({where:{id:ownerListingId}});for(const file of ownerPhotoPaths)await unlink(file).catch(()=>{});await db.$disconnect();if(socket?.readyState===1)socket.close();chrome.kill();}
+finally{if(roomId)await db.escapeRoom.deleteMany({where:{id:roomId}});if(ownerListingId)await db.listing.deleteMany({where:{id:ownerListingId}});if(ownerPhotoUrls.length)await deletePhotoObjects(db,createStorageClient().from(storageBucket()),ownerPhotoUrls);await db.$disconnect();if(socket?.readyState===1)socket.close();chrome.kill();}

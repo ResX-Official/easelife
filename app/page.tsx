@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { SectionHeading } from "@/components/landing/section-heading";
@@ -15,6 +16,7 @@ import { EscapePromo } from "@/components/landing/escape-promo";
 import { CtaBanner } from "@/components/landing/cta-banner";
 
 export default async function Home() {
+  await connection();
   const [listings, listingCount, cityGroups] = await Promise.all([
     prisma.listing.findMany({
       where: { listingCategory: { in: ["sale", "staycation", "rent"] } },

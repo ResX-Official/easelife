@@ -1,5 +1,5 @@
 import { MAX_PHOTOS, UploadError } from "./upload-policy.ts";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 type ListingStore = Pick<PrismaClient, "listing">;
 
@@ -19,6 +19,7 @@ export async function updateOwnedListing(
   photoUrls: string[],
 ) {
   return store.$transaction(async (db) => {
+    await db.$queryRaw`SELECT "id" FROM "easelife"."Listing" WHERE "id" = ${id} AND "managementToken" = ${token} FOR UPDATE`;
     const listing = await db.listing.findFirst({
       where: { id, managementToken: token },
       include: { _count: { select: { photos: true } } },
@@ -39,6 +40,7 @@ export async function updateOwnedListing(
 
 export async function deleteOwnedListing(store: PrismaClient, id: string, token: string) {
   return store.$transaction(async (db) => {
+    await db.$queryRaw`SELECT "id" FROM "easelife"."Listing" WHERE "id" = ${id} AND "managementToken" = ${token} FOR UPDATE`;
     const listing = await findOwnedListing(db, id, token);
     if (!listing) throw new Error("Listing not found.");
     await db.listing.delete({ where: { id, managementToken: token } });
@@ -48,8 +50,12 @@ export async function deleteOwnedListing(store: PrismaClient, id: string, token:
 
 export async function deleteListingsWithPhotos(store: PrismaClient, where: Prisma.ListingWhereInput) {
   return store.$transaction(async (db) => {
-    const photos = await db.photo.findMany({ where: { listing: where }, select: { url: true } });
-    await db.listing.deleteMany({ where });
+    const candidates = await db.listing.findMany({ where, select: { id: true } });
+    const ids = candidates.map(listing => listing.id);
+    if (ids.length === 0) return [];
+    await db.$queryRaw(Prisma.sql`SELECT "id" FROM "easelife"."Listing" WHERE "id" IN (${Prisma.join(ids)}) ORDER BY "id" FOR UPDATE`);
+    const photos = await db.photo.findMany({ where: { listingId: { in: ids } }, select: { url: true } });
+    await db.listing.deleteMany({ where: { id: { in: ids } } });
     return photos.map(photo => photo.url);
   });
 }

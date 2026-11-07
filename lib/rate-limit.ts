@@ -23,12 +23,12 @@ export async function consumeRateLimit(
   const key = createHash("sha256").update(`${scope}:${identity}:${window}`).digest("hex");
   const expiresAt = (window + 1) * windowSeconds;
   const rows = await store.$queryRaw<{ count: number }[]>`
-    INSERT INTO "RequestLimit" ("key", "count", "expiresAt")
+    INSERT INTO "easelife"."RequestLimit" ("key", "count", "expiresAt")
     VALUES (${key}, 1, ${expiresAt})
-    ON CONFLICT ("key") DO UPDATE SET "count" = "count" + 1
-    WHERE "count" < ${limit}
+    ON CONFLICT ("key") DO UPDATE SET "count" = "RequestLimit"."count" + 1
+    WHERE "RequestLimit"."count" < ${limit}
     RETURNING "count"
   `;
-  await store.$executeRaw`DELETE FROM "RequestLimit" WHERE "expiresAt" <= ${now}`;
+  await store.$executeRaw`DELETE FROM "easelife"."RequestLimit" WHERE "expiresAt" <= ${now}`;
   return { allowed: rows.length > 0, retryAfter: Math.max(1, expiresAt - now) };
 }

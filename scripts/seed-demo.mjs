@@ -1,7 +1,6 @@
 import "dotenv/config";
-import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { createDatabaseClient } from "../lib/database.ts";
 import { seedDemoListings } from "../lib/demo-data.ts";
-const prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: process.env.DATABASE_URL ?? "file:./dev.db" }) });
+const prisma = createDatabaseClient();
 try { console.log(`Added ${await seedDemoListings(prisma)} demo listings. Existing listings preserved.`); }
 finally { await prisma.$disconnect(); }

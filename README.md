@@ -2,80 +2,86 @@
 
 Easelife is a property website for finding homes to buy, apartments to rent, and places to stay for a short break. You can list a property and send an enquiry directly from the site.
 
-It also has Escape Match, where a group of friends can pick a place to stay together.
+Escape Match lets a group of friends vote on places and choose a stay together.
 
-Built with Next.js, Prisma, and SQLite.
+Built with Next.js, Prisma, Supabase Postgres, and Supabase Storage.
 
-## Run it locally
+## Set it up
 
-You need Node.js 24 or newer.
+Use Node.js 24. Create a free Supabase project, then copy `.env.example` to `.env` and fill in your values.
 
-Create a `.env` file in the project folder:
+| Variable | What to use |
+| --- | --- |
+| `DATABASE_URL` | The transaction pooler URI from Supabase's Connect panel, on port 6543. Add `?sslmode=require` if it has no query string. |
+| `DIRECT_URL` | The session pooler URI from the same panel, on port 5432. Add `?sslmode=require&schema=easelife` if it has no query string. This is used for migrations. |
+| `SUPABASE_URL` | Your project's URL, such as `https://your-project.supabase.co`. |
+| `SUPABASE_SECRET_KEY` | A secret API key from Supabase Settings → API Keys. A legacy `service_role` key also works. |
+| `SUPABASE_STORAGE_BUCKET` | `listing-photos` |
+| `ADMIN_USERNAME` | Choose an admin username. |
+| `ADMIN_PASSWORD` | Choose a long, unique password. |
+| `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` locally, or your live HTTPS address. |
+| `UPLOAD_STORAGE_LIMIT_MB` | `512`, or a smaller limit if you want. |
+| `TRUSTED_CLIENT_IP_HEADER` | Leave blank locally. Vercel's own client-IP header is used automatically when deployed there. |
 
-```dotenv
-DATABASE_URL="file:./dev.db"
-ADMIN_USERNAME="your-admin-username"
-ADMIN_PASSWORD="a-long-unique-password"
-NEXT_PUBLIC_SITE_URL="http://localhost:3000"
-```
+The Supabase database CA certificate is bundled in `prisma/certificates/supabase-root.crt`. The app verifies TLS certificates and hostnames; migrations use the same CA. Its source is `https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt`.
 
-Install the packages and set up the database:
+Copy the actual connection strings from Supabase. The pooler host varies by project and region. Replace the password placeholder with your database password, URL-encoded if it contains special characters. The database password is separate from your API key and admin password.
+
+Keep the secret key and database URLs on the server. They must never have a `NEXT_PUBLIC_` prefix or go into GitHub. This app doesn't need a browser-side Supabase key.
+
+Run:
 
 ```bash
 npm install
 npx prisma generate
-npx prisma migrate deploy
-```
-
-If you want some sample properties to try out:
-
-```bash
-npm run seed:demo
-```
-
-Then start the app:
-
-```bash
+npm run db:migrate
+npm run setup:storage
 npm run dev
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:3000.
 
-The sample properties are marked as demos, and you can't send enquiries for them. Running the seed again won't add duplicates or change your own listings. You can also add or remove the demos from Settings in the admin page.
+The setup command creates a private bucket that only accepts WebP images. The app checks and converts photos before uploading them, and serves them through `/uploads/[filename]`. Don't make the bucket public or add browser upload policies.
 
-## What's in the app
+The database tables live in the private `easelife` schema and have row-level security enabled. Don't add this schema to Supabase's exposed Data API schemas. Prisma connects from the server using the database credentials.
+
+For sample properties, run `npm run seed:demo`, or add them from Admin → Settings. They are marked as demos and can't receive enquiries. Running the seed again won't add duplicates or change your own listings.
+
+## Pages
 
 - `/listings?category=apartments` — apartments and penthouses.
-- `/listings?category=staycation` — places for short stays, with filters for location, price, bedrooms, and more.
+- `/listings?category=staycation` — places for short stays.
 - `/listings?type=sale` — homes for sale.
 - `/list-property` — add a property.
-- `/my-listings` — find the management links saved in your browser.
-- `/admin` — manage listings, enquiries, Escape Match rooms, site stats, and the site logo.
+- `/my-listings` — management links saved in your browser.
+- `/admin` — manage properties, enquiries, rooms, site stats, the logo, and demos.
 - `/escape` — plan a stay with friends.
 
-When you add a property, you'll get a private link to manage it. Keep that link safe. The links on `/my-listings` are saved in the browser you used.
+Keep the private management link you get after adding a property. Anyone with that link can edit the property and read its enquiries. Share the public listing link with other people.
 
-## How Escape Match works
+## Escape Match
 
-One person creates a room, chooses the group size, number of nights, budget, and the kind of place they want. They then share the room link with their friends.
+One person creates a room and shares its link. Groups can have 2–12 people and compare stays of 1–14 nights. There must be at least two places that fit the group's choices. The app shows up to six options.
 
-Rooms support 2–12 people and stays of 1–14 nights. There need to be at least two places that fit the choices. The app shows up to six options with enough space for the group.
+Everyone joins with a nickname and votes Skip, Maybe, or I'm in. Votes stay private until the results come out. Results show when the planned group finishes voting. The organiser can reveal early once at least two people have joined and everyone in the room has finished.
 
-Everyone joins with a nickname and votes Skip, Maybe, or I'm in. People can only see their own votes until the results come out.
+Daily prices are multiplied by the number of nights, and per-stay prices are charged once. The cost is split between the people taking part. Monthly and yearly rates aren't used. Travel and extras aren't included.
 
-Results show when the full group has joined and finished voting. The person who made the room can also show results early once at least two people have joined and everyone in the room has finished. After that, nobody else can join or vote.
+Rooms last for 30 days. Return in the same browser to keep your access. Escape Match helps people choose a place and send an enquiry; booking and availability still need to be confirmed with the owner.
 
-If everyone picks I'm in for a place, it's a group match. Otherwise, the app shows the places with the most points. If everyone skips everything, there's no match.
+## Deploy to Vercel
 
-The cost shown is the accommodation price split between the people taking part. Daily prices are multiplied by the number of nights, and per-stay prices are charged once. Places with monthly or yearly prices aren't used here. Travel and other extras aren't included.
+Run `npm run db:migrate` and `npm run setup:storage` locally with your Supabase values before the first deployment. Run migrations again when a later release adds one. The build doesn't apply migrations or add demo data.
 
-Rooms last for 30 days. Use the same browser to return to your room, since that's where your access is saved. Sharing a room link doesn't give someone control of the room.
+Push the code, import the GitHub repo into Vercel, choose Next.js and Node.js 24, and use `npm run build` as the build command. Add the environment variables above to the Production environment. Use your final Vercel URL for `NEXT_PUBLIC_SITE_URL`; change it and redeploy if the assigned address is different. If you use Preview deployments, give them a separate Supabase project so previews don't change production data.
 
-Escape Match helps the group choose a place and send an enquiry. You'll still need to confirm availability and booking details with the owner. Sharing is up to you; the app doesn't send messages on its own.
+On Vercel, `DIRECT_URL` is only needed if you intend to run migration commands there. Keep it in your local `.env` for the usual setup flow.
+
+Uploads are limited to 3 MB per request and 15 photos per listing. This leaves room for form data below Vercel's request limit. You can add more photos in later edits. The server removes image metadata and limits photos to 20 megapixels before resizing them. Storage reservations and rate limits are kept in Postgres so they work across server instances. Deleted listing photos are removed from the bucket.
+
+After deploying, add a property and photo, send an enquiry, check the owner inbox, and test the admin login. Redeploy once and confirm the data is still there.
 
 ## Checks
-
-Run these before pushing changes:
 
 ```bash
 npm run lint
@@ -84,32 +90,22 @@ npm test
 npm run build
 ```
 
-There's also a browser check. Start the app first and make sure Google Chrome is installed:
+Postgres integration tests need `TEST_DATABASE_URL` pointing to a separate local test server whose user can create databases. Each test creates and removes its own temporary database. Without that variable, those tests are reported as skipped.
+
+```bash
+TEST_DATABASE_URL=postgresql://postgres:password@localhost:5432/postgres npm test
+```
+
+With the app running and Google Chrome installed:
 
 ```bash
 npm run test:browser
-```
-
-It checks the group voting flow, privacy, room limits, saved progress, and layouts on different screen sizes. It also checks admin pages if you've set up the admin login. Screenshots go in `/tmp/easelife-smoke`, and the test room is removed when it's done.
-
-To check adding, editing, and deleting a property, uploads, and enquiries against a production server:
-
-```bash
 npm run test:browser -- --owner-only --origin=http://127.0.0.1:3000
+npm run test:browser -- --security-only --origin=http://127.0.0.1:3000
 ```
 
-This creates a test listing and removes it and its uploaded photo afterward.
+Use a test Supabase project for browser checks. They create temporary records and photos, then remove them. Screenshots go in `/tmp/easelife-smoke`. The general catalogue checks expect demo listings and a monthly apartment sample.
 
-## Hosting
+## Existing local data
 
-Use a Node.js host that keeps the SQLite database and `public/uploads` between releases. New uploads are served from `/uploads/[filename]` and don't need a server restart.
-
-Run `prisma migrate deploy` before starting a new release. Set your admin username and password, enable HTTPS, and change `NEXT_PUBLIC_SITE_URL` to your live site address so shared links have the right preview images.
-
-The production build doesn't add demo properties automatically.
-
-Before starting an updated version, run `npx prisma migrate deploy`. This also creates the table used to limit repeated requests. Limits are saved in SQLite and survive restarts.
-
-By default, requests share a limit because the app doesn't trust IP headers sent by a browser. If your reverse proxy removes incoming copies and sets a header with the real client IP, set `TRUSTED_CLIENT_IP_HEADER` to that header name. It must contain one IP address, not a list. Keep the app behind that proxy so visitors can't bypass it.
-
-Uploads are limited to 5 MB per photo, 10 MB per request, and 15 photos per listing. The server checks and converts images to WebP, removes metadata, and limits image dimensions. `UPLOAD_STORAGE_LIMIT_MB` sets the total upload storage limit; the default is 1024 MB. Deleted listings also have their uploaded photos removed.
+Old SQLite migrations are kept in `prisma/legacy-sqlite-migrations` for reference. Existing local database files and uploaded photos are left untouched. They aren't copied into Supabase automatically. Use a new, empty Supabase project for this migration. If you need the old data online, transfer the records and photos before switching the live app over.

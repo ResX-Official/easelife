@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
@@ -43,6 +44,7 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  await connection();
   const logoSetting = await prisma.siteSetting.findUnique({ where: { key: "logoUrl" } });
   return (
     <html

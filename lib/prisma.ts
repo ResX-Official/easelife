@@ -1,23 +1,10 @@
-import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import "server-only";
+import { createDatabaseClient } from "@/lib/database";
 
 const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-  prismaSchemaVersion: string | undefined;
+  prisma: ReturnType<typeof createDatabaseClient> | undefined;
 };
 
-const schemaVersion = "request-limits-20261106";
+export const prisma = globalForPrisma.prisma ?? createDatabaseClient();
 
-const adapter = new PrismaBetterSqlite3({
-  url: process.env.DATABASE_URL ?? "file:./dev.db",
-});
-
-export const prisma =
-  globalForPrisma.prismaSchemaVersion === schemaVersion && globalForPrisma.prisma
-    ? globalForPrisma.prisma
-    : new PrismaClient({ adapter });
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
-  globalForPrisma.prismaSchemaVersion = schemaVersion;
-}
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;

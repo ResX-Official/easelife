@@ -1,13 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import sharp from "sharp";
 import { hasMatchingOrigin } from "../lib/request-origin.ts";
 import { signSession, verifySession, safeEqual } from "../lib/admin-session.ts";
 import { validateListingFields, validateMessage } from "../lib/listing-validation.ts";
-import { preparePhotos, storePhotos, removePhotos, MAX_PHOTO_BYTES } from "../lib/photo-storage.ts";
+import { preparePhotos, uploadFilename, MAX_PHOTO_BYTES } from "../lib/photo-storage.ts";
 
 const secret = "test-secret-only-not-a-real-password";
 
@@ -64,21 +61,9 @@ test("photos reject fake images, SVG, corrupt data, large files, and excess coun
   await assert.rejects(preparePhotos([new File([large], "huge.png")]));
 });
 
-test("storage enforces quota and cleanup cannot escape the upload directory", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "easelife-storage-"));
-  const directory = path.join(root, "uploads");
-  try {
-    const urls = await storePhotos(directory, [Buffer.from("first")], 10);
-    await assert.rejects(storePhotos(directory, [Buffer.alloc(6)], 10));
-    assert.equal((await readdir(directory)).length, 1);
-    await writeFile(path.join(root, "keep.txt"), "keep");
-    await removePhotos(directory, ["/uploads/../keep.txt", "https://example.test/photo.png", ...urls]);
-    assert.equal(await readFile(path.join(root, "keep.txt"), "utf8"), "keep");
-    assert.deepEqual(await readdir(directory), []);
-    await removePhotos(directory, urls);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+test("photo paths reject traversal and external URLs", () => {
+  assert.equal(uploadFilename("/uploads/test.webp"), "test.webp");
+  for (const url of ["/uploads/../keep.txt", "https://example.test/photo.png", "/uploads/folder/photo.webp", "/uploads/%2e%2e.webp"]) assert.equal(uploadFilename(url), undefined);
 });
 
 test("origin checks use the incoming host when Next.js has an internal request URL", () => {
@@ -87,4 +72,14 @@ test("origin checks use the incoming host when Next.js has an internal request U
   assert.equal(hasMatchingOrigin(request("http://other.example")), false);
   assert.equal(hasMatchingOrigin(request("invalid")), false);
   assert.equal(hasMatchingOrigin(new Request("http://localhost/api/visit")), true);
+});
+
+test("Supabase connections always verify the bundled CA and reject disabled TLS", async () => {
+  const { databaseConnectionOptions } = await import("../lib/database-ssl.ts");
+  const options = databaseConnectionOptions("postgresql://user:password@aws-1-eu-central-1.pooler.supabase.com:6543/postgres?sslmode=disable&sslrootcert=/untrusted.crt");
+  assert.equal(options.ssl.rejectUnauthorized, true);
+  assert.match(options.ssl.ca, /BEGIN CERTIFICATE/);
+  assert.equal(new URL(options.connectionString).searchParams.has("sslmode"), false);
+  assert.equal(new URL(options.connectionString).searchParams.has("sslrootcert"), false);
+  assert.deepEqual(databaseConnectionOptions("postgresql://localhost/test"), { connectionString: "postgresql://localhost/test" });
 });

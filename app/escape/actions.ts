@@ -51,6 +51,7 @@ export async function joinEscape(roomId: string, _previous: EscapeActionState, d
   const jar = await cookies(), existing = jar.get(`escape_member_${roomId}`)?.value;
   const token = existing || secret();
   const outcome = await prisma.$transaction(async db => {
+    await db.$queryRaw`SELECT "id" FROM "easelife"."EscapeRoom" WHERE "id" = ${roomId} FOR UPDATE`;
     const room = await db.escapeRoom.findUnique({ where: { id: roomId }, include: { members: { select: { tokenHash: true, name: true } }, _count: { select: { options: true } } } });
     if (!room || expired(room.createdAt)) return "This invitation has expired. Start a fresh escape.";
     if (room.members.some(m => m.tokenHash === hash(token))) return null;
@@ -73,6 +74,7 @@ export async function voteEscape(roomId: string, optionId: string, value: number
   const token = (await cookies()).get(`escape_member_${roomId}`)?.value;
   if (!token) return { error: "Join the escape before making your picks." };
   const outcome = await prisma.$transaction(async db => {
+    await db.$queryRaw`SELECT "id" FROM "easelife"."EscapeRoom" WHERE "id" = ${roomId} FOR UPDATE`;
     const room = await db.escapeRoom.findUnique({ where: { id: roomId }, include: { options: { select: { id: true } }, members: { include: { _count: { select: { votes: true } } } } } });
     if (!room || expired(room.createdAt)) return "This escape has expired. Start a fresh one.";
     if (room.status !== "voting") return "The results have been revealed. Your votes are now locked.";
@@ -94,6 +96,7 @@ export async function revealEscape(roomId: string): Promise<EscapeActionState> {
   const token = (await cookies()).get(`escape_host_${roomId}`)?.value;
   if (!token) return { error: "Only the organiser can reveal early." };
   const outcome = await prisma.$transaction(async db => {
+    await db.$queryRaw`SELECT "id" FROM "easelife"."EscapeRoom" WHERE "id" = ${roomId} FOR UPDATE`;
     const room = await db.escapeRoom.findUnique({ where: { id: roomId }, include: { _count: { select: { options: true } }, members: { include: { _count: { select: { votes: true } } } } } });
     if (!room || room.hostHash !== hash(token) || expired(room.createdAt)) return "This organiser link is no longer valid.";
     if (room.status === "revealed") return null;

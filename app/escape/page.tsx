@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Image from "next/image";
 import { ArrowDown, Heart, Link2, Sparkles, Users } from "lucide-react";
 import { prisma } from "@/lib/prisma";
@@ -5,6 +6,7 @@ import { EscapeCreateForm } from "@/components/escape-create-form";
 import { STOCK_PHOTOS, unsplashUrl } from "@/lib/stock-photos";
 export const metadata = { title: "Escape Match — Get your people on the same wavelength | Easelife", description: "Invite your friends, make your picks privately, and discover the staycation your group agrees on." };
 export default async function EscapePage() {
+  await connection();
   const [locations, count] = await Promise.all([prisma.listing.findMany({ where: { listingCategory: { in: ["staycation", "rent"] }, paymentFrequency: { in: ["daily", "per_stay"] } }, distinct: ["city"], select: { city: true }, orderBy: { city: "asc" } }), prisma.listing.count({ where: { listingCategory: { in: ["staycation", "rent"] }, paymentFrequency: { in: ["daily", "per_stay"] } } })]);
   return <div className="escape-page"><div className="shell escape-landing-layout"><div className="escape-story"><p className="escape-label"><Sparkles className="h-3.5 w-3.5" />Introducing Escape Match</p><h1>Your group chat.<br />Finally going<br /><span>somewhere.</span></h1><p className="escape-lead">One person loves the pool. Another wants peace and quiet. Find the place that gets everyone saying “I’m in.”</p><div className="escape-story-photo"><Image src={unsplashUrl(STOCK_PHOTOS.manifesto)} alt="A sunlit villa with a pool for a weekend with friends" fill preload sizes="(min-width: 1024px) 500px, 100vw" className="object-cover" /><div className="escape-photo-note"><span className="escape-mini-avatars">A <span>D</span> <span>T</span></span><span>Good places. Better company.</span><Heart className="h-4 w-4" /></div></div><div className="escape-how"><div><Link2 /><p>Send one link</p></div><div><Heart /><p>Pick privately</p></div><div><Users /><p>Reveal your match</p></div></div><a href="#create-escape" className="text-link escape-start-link">Let’s make a plan <ArrowDown className="h-4 w-4" /></a></div><section id="create-escape" className="scroll-mt-24">{count >= 2 ? <EscapeCreateForm locations={locations.map(l=>l.city)} /> : <div className="empty-panel"><Sparkles className="h-8 w-8" /><h2>A few more places, then we’re off.</h2><p>We need at least two staycation listings to start matching. Check back soon.</p></div>}</section></div></div>;
 }

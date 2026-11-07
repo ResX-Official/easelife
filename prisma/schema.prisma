@@ -3,7 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
+  schemas  = ["easelife"]
 }
 
 model Listing {
@@ -32,6 +33,8 @@ model Listing {
   updatedAt        DateTime  @updatedAt
   photos           Photo[]
   messages         Message[]
+
+  @@schema("easelife")
 }
 
 model Photo {
@@ -40,6 +43,8 @@ model Photo {
   order     Int     @default(0)
   listingId String
   listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@schema("easelife")
 }
 
 model Message {
@@ -51,6 +56,8 @@ model Message {
   createdAt   DateTime @default(now())
   listingId   String
   listing     Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@schema("easelife")
 }
 
 model VisitorEvent {
@@ -61,11 +68,15 @@ model VisitorEvent {
 
   @@index([visitedAt])
   @@index([visitorId])
+
+  @@schema("easelife")
 }
 
 model SiteSetting {
   key   String @id
   value String
+
+  @@schema("easelife")
 }
 
 model EscapeRoom {
@@ -83,6 +94,8 @@ model EscapeRoom {
   createdAt   DateTime @default(now())
   options     EscapeOption[]
   members     EscapeMember[]
+
+  @@schema("easelife")
 }
 
 model EscapeOption {
@@ -93,6 +106,8 @@ model EscapeOption {
   listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
   votes     EscapeVote[]
   @@unique([roomId, listingId])
+
+  @@schema("easelife")
 }
 
 model EscapeMember {
@@ -104,6 +119,8 @@ model EscapeMember {
   room      EscapeRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
   votes     EscapeVote[]
   @@index([roomId])
+
+  @@schema("easelife")
 }
 
 model EscapeVote {
@@ -114,6 +131,8 @@ model EscapeVote {
   member   EscapeMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
   option   EscapeOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
   @@unique([memberId, optionId])
+
+  @@schema("easelife")
 }
 
 model RequestLimit {
@@ -122,4 +141,16 @@ model RequestLimit {
   expiresAt Int
 
   @@index([expiresAt])
+
+  @@schema("easelife")
+}
+
+model StoredPhoto {
+  filename  String   @id
+  size      Int
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@schema("easelife")
 }
