@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { ImagePlus, X } from "lucide-react";
 
-import { MAX_PHOTOS, MAX_UPLOAD_BYTES as MAX_TOTAL_BYTES } from "@/lib/upload-policy";
+import { MAX_PHOTOS, MAX_PHOTO_BYTES } from "@/lib/upload-policy";
 
 type Picked = { id: string; key: string; file: File; url: string };
 
@@ -49,10 +49,14 @@ export function PhotoPicker({
   onChange,
   existingPhotos = [],
   label,
+  disabled = false,
+  onBusyChange,
 }: {
   onChange: (files: File[]) => void;
   existingPhotos?: { id: string; url: string }[];
   label: string;
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [previews, setPreviews] = useState<Picked[]>([]);
@@ -71,6 +75,7 @@ export function PhotoPicker({
   }, []);
 
   const syncing = useRef(false);
+  const processing = useRef(false);
   useEffect(() => {
     const input = inputRef.current;
     if (!input) return;
@@ -86,7 +91,7 @@ export function PhotoPicker({
   }, [previews]);
 
   async function addFiles(incoming: FileList | File[] | null) {
-    if (!incoming || syncing.current) return;
+    if (!incoming || syncing.current || processing.current || disabled) return;
     const images = Array.from(incoming).filter(
       (file) => file.size > 0 && file.type.startsWith("image/")
     );
@@ -97,7 +102,9 @@ export function PhotoPicker({
       return;
     }
 
+    processing.current = true;
     setBusy(true);
+    onBusyChange?.(true);
     setNotice(null);
 
     const room = MAX_PHOTOS - existingPhotos.length - previews.length;
@@ -105,32 +112,27 @@ export function PhotoPicker({
     const skipped = images.length - accepted.length;
 
     const processed: Picked[] = [];
-    for (const file of accepted) {
-      const key = `${file.name}:${file.size}:${file.lastModified}`;
-      const duplicate =
-        previews.some((preview) => preview.key === key) ||
-        processed.some((item) => item.key === key);
-      if (duplicate) continue;
-      const compressed = await compressImage(file);
-      processed.push({
-        id: crypto.randomUUID(),
-        key,
-        file: compressed,
-        url: URL.createObjectURL(compressed),
-      });
+    try {
+      for (const file of accepted) {
+        const key = `${file.name}:${file.size}:${file.lastModified}`;
+        if (previews.some(preview => preview.key === key) || processed.some(item => item.key === key)) continue;
+        const compressed = await compressImage(file);
+        processed.push({ id: crypto.randomUUID(), key, file: compressed, url: URL.createObjectURL(compressed) });
+      }
+      if (processed.length > 0) {
+        const nextPreviews = [...previews, ...processed];
+        setPreviews(nextPreviews);
+        onChange(nextPreviews.map(preview => preview.file));
+      }
+      if (skipped > 0) setNotice(`Only ${MAX_PHOTOS} photos per listing — ${skipped} not added.`);
+    } catch {
+      for (const preview of processed) URL.revokeObjectURL(preview.url);
+      setNotice("Some photos could not be prepared. Please try adding them again.");
+    } finally {
+      processing.current = false;
+      setBusy(false);
+      onBusyChange?.(false);
     }
-
-    if (processed.length > 0) {
-      const nextPreviews = [...previews, ...processed];
-      setPreviews(nextPreviews);
-      onChange(nextPreviews.map((preview) => preview.file));
-    }
-    setBusy(false);
-
-    if (skipped > 0) {
-      setNotice(`Only ${MAX_PHOTOS} photos per listing — ${skipped} not added.`);
-    }
-
   }
 
   function remove(id: string) {
@@ -143,7 +145,7 @@ export function PhotoPicker({
   }
 
   const totalBytes = previews.reduce((sum, preview) => sum + preview.file.size, 0);
-  const overBudget = totalBytes > MAX_TOTAL_BYTES;
+  const overBudget = previews.some(preview => preview.file.size > MAX_PHOTO_BYTES);
   const count = existingPhotos.length + previews.length;
 
   return (
@@ -181,6 +183,7 @@ export function PhotoPicker({
           type="file"
           accept="image/*"
           multiple
+          disabled={disabled || busy}
           className="sr-only"
           onChange={(event) => void addFiles(event.target.files)}
         />
@@ -192,12 +195,11 @@ export function PhotoPicker({
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-zinc-500">
           <span>
             {count} photo{count === 1 ? "" : "s"}
-            {previews.length > 0 && ` · ${formatBytes(totalBytes)} to upload`}
+            {previews.length > 0 && ` · ${formatBytes(totalBytes)} selected`}
           </span>
           {overBudget && (
             <span className="font-medium text-red-600">
-              Too much at once &mdash; remove a few (max{" "}
-              {formatBytes(MAX_TOTAL_BYTES)}).
+              Each photo must be {formatBytes(MAX_PHOTO_BYTES)} or smaller.
             </span>
           )}
         </div>
@@ -238,6 +240,7 @@ export function PhotoPicker({
               />
               <button
                 type="button"
+                disabled={disabled || busy}
                 onClick={() => remove(preview.id)}
                 aria-label={`Remove ${preview.file.name}`}
                 className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-red-600"

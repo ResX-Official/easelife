@@ -19,14 +19,14 @@ export async function deletePhotoObjects(db: PrismaClient, bucket: Bucket, urls:
 
 export async function cleanupPendingPhotos(db: PrismaClient, bucket: Bucket) {
   const stale = await db.storedPhoto.findMany({
-    where: { OR: [{ status: "deleting" }, { status: "pending", createdAt: { lt: new Date(Date.now() - 3600000) } }] },
+    where: { OR: [{ status: "deleting" }, { status: { in: ["pending", "staged"] }, createdAt: { lt: new Date(Date.now() - 3600000) } }] },
     take: 100,
     select: { filename: true },
   });
   await deletePhotoObjects(db, bucket, stale.map(photo => `/uploads/${photo.filename}`));
 }
 
-export async function savePhotoObjects(db: PrismaClient, bucket: Bucket, images: Buffer[], quotaBytes: number) {
+export async function savePhotoObjects(db: PrismaClient, bucket: Bucket, images: Buffer[], quotaBytes: number, status: "ready" | "staged" = "ready") {
   if (!Number.isSafeInteger(quotaBytes) || quotaBytes <= 0) throw new Error("Photo storage quota must be a positive whole number of bytes.");
   if (images.length === 0) return [];
   await cleanupPendingPhotos(db, bucket);
@@ -48,7 +48,7 @@ export async function savePhotoObjects(db: PrismaClient, bucket: Bucket, images:
       });
       if (error) throw new UploadError("The photos could not be uploaded. Please try again.");
     }
-    await db.storedPhoto.updateMany({ where: { filename: { in: assets.map(asset => asset.filename) } }, data: { status: "ready" } });
+    await db.storedPhoto.updateMany({ where: { filename: { in: assets.map(asset => asset.filename) } }, data: { status } });
     return urls;
   } catch (error) {
     try {

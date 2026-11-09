@@ -11,7 +11,7 @@ const output = "/tmp/easelife-smoke";
 await mkdir(output,{recursive:true});
 const db = createDatabaseClient();
 const chrome = spawn("google-chrome",["--headless","--no-sandbox","--disable-gpu","--disable-dev-shm-usage","--remote-debugging-port=0",`--user-data-dir=${output}/chrome`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
-let roomId, socket, ownerListingId;
+let roomId, socket, ownerListingId, ownerTitle;
 const ownerPhotoUrls = [];
 const delay = ms => new Promise(resolve=>setTimeout(resolve,ms));
 try {
@@ -29,7 +29,7 @@ try {
   function cmd(method,params={},sessionId){return new Promise((resolve,reject)=>{const id=++seq;const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Browser command timed out: ${method}`));},30000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});}
   async function page(){const {browserContextId}=await cmd("Target.createBrowserContext");const {targetId}=await cmd("Target.createTarget",{url:"about:blank",browserContextId});const {sessionId}=await cmd("Target.attachToTarget",{targetId,flatten:true});await cmd("Page.enable",{},sessionId);await cmd("Runtime.enable",{},sessionId);await cmd("Network.enable",{},sessionId);return sessionId;}
   async function evaluate(s,expression){const r=await cmd("Runtime.evaluate",{expression,awaitPromise:true,returnByValue:true},s);if(r.exceptionDetails)throw new Error(r.exceptionDetails.exception?.description ?? "Browser evaluation failed");return r.result.value;}
-  async function wait(s,expression,message=expression){for(let n=0;n<120;n++){try{if(await evaluate(s,expression))return;}catch{}await delay(250);}const detail=await evaluate(s,"({path:location.pathname,error:document.querySelector('.form-error')?.textContent,invalid:[...document.querySelectorAll('input:invalid')].map(e=>e.name)})");const shot=await cmd("Page.captureScreenshot",{format:"png"},s);await writeFile(`${output}/failure.png`,Buffer.from(shot.data,"base64"));throw new Error(`Timed out: ${message} ${JSON.stringify(detail)}`);}
+  async function wait(s,expression,message=expression,attempts=120){for(let n=0;n<attempts;n++){try{if(await evaluate(s,expression))return;}catch{}await delay(250);}const detail=await evaluate(s,"({path:location.pathname,error:document.querySelector('.form-error')?.textContent,invalid:[...document.querySelectorAll('input:invalid')].map(e=>e.name)})");const shot=await cmd("Page.captureScreenshot",{format:"png"},s);await writeFile(`${output}/failure.png`,Buffer.from(shot.data,"base64"));throw new Error(`Timed out: ${message} ${JSON.stringify(detail)}`);}
   async function go(s,path){await cmd("Page.bringToFront",{},s);await cmd("Page.navigate",{url:`${origin}${path}`},s);await wait(s,"document.readyState === 'complete' && document.body && !document.body.innerText.includes('Compiling')","page ready");await delay(700);}
   async function interactive(s) {
     await wait(s,`(()=>{const button=document.querySelector('button[aria-label="Toggle menu"]');if(!button)return false;if(button.getAttribute('aria-expanded')==='true')return true;button.click();return button.getAttribute('aria-expanded')==='true';})()`,"interactive navigation");
@@ -70,17 +70,34 @@ try {
     console.log("PASS persistent API rate limits and forwarding-header spoof protection");
   } else if(process.argv.includes("--owner-only")) {
     const title = `QA publishing ${Date.now()}`;
+    ownerTitle = title;
+    const manyPhotos = process.argv.includes("--many-photos");
+    const photoCount = manyPhotos ? 15 : 1;
     await go(host,"/list-property");
     await interactive(host);
     await fields(host,{title,description:"Temporary end-to-end readiness check.",price:"120000",bedrooms:"2",bathrooms:"2",city:"Lagos",state:"Lagos",address:"QA test address",landlordName:"QA Owner",landlordEmail:"qa@example.test",landlordPhone:"08000000000"});
     await evaluate(host,"document.querySelector('#propertyType').click()");
     await wait(host,"!!document.querySelector('[role=option]')","property type dropdown");
     await click(host,"Apartment");
-    await evaluate(host,`(()=>{const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;canvas.getContext('2d').fillRect(0,0,64,64);return new Promise(resolve=>canvas.toBlob(blob=>{const input=document.querySelector('input[name=photos]');const files=new DataTransfer();files.items.add(new File([blob],'qa.png',{type:'image/png'}));input.files=files.files;input.dispatchEvent(new Event('change',{bubbles:true}));resolve(true);},'image/png'));})()`);
-    await wait(host,"document.body.innerText.includes('1 photo')","photo prepared");
+    if(manyPhotos) {
+      await evaluate(host,`(()=>{window.qaPhotoRequests=0;const original=window.fetch.bind(window);window.fetch=async(input,options)=>{if(input==='/api/photos'){window.qaPhotoRequests++;sessionStorage.setItem('qaPhotoRequests',String(window.qaPhotoRequests));if(window.qaPhotoRequests===3)return new Response(JSON.stringify({error:'Temporary upload failure'}),{status:503,headers:{'content-type':'application/json'}});}if(input==='/api/listings'){const started=performance.now();const response=await original(input,options);sessionStorage.setItem('qaPublishDuration',String(Math.round(performance.now()-started)));return response;}return original(input,options);};})()`);
+    }
+    await evaluate(host,`(async()=>{const files=new DataTransfer();for(let index=0;index<${photoCount};index++){const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=1024;const context=canvas.getContext('2d');const data=context.createImageData(1024,1024);let seed=index+1;for(let offset=0;offset<data.data.length;offset+=4){seed=(Math.imul(seed,1664525)+1013904223)>>>0;data.data[offset]=seed&255;data.data[offset+1]=(seed>>>8)&255;data.data[offset+2]=(seed>>>16)&255;data.data[offset+3]=255;}context.putImageData(data,0,0);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.95));files.items.add(new File([blob],'qa-'+index+'.jpg',{type:'image/jpeg'}));}const input=document.querySelector('input[name=photos]');input.files=files.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`);
+    await wait(host,`document.body.innerText.includes('${photoCount} photo') && !document.querySelector('button[type=submit]').disabled`,"photos prepared",240);
+    if(manyPhotos) {
+      assert.ok(await evaluate(host,"[...document.querySelector('input[name=photos]').files].reduce((sum,file)=>sum+file.size,0)>4.5*1024*1024"),"Regression selection exceeds the old single-request limit");
+      await wait(host,"document.querySelector('[role=alert]')?.textContent.includes('Some photos')","recoverable background upload error",240);
+      assert.equal(await evaluate(host,"document.querySelector('input[name=title]').value"),title,"Upload failures preserve listing details");
+      assert.ok(await evaluate(host,"document.body.innerText.includes('15 photos')"),"Upload failures preserve selected photos");
+      console.log("PASS background upload failure preserves the form and allows retry");
+    }
     await evaluate(host,"document.querySelector('input[name=title]').form.requestSubmit()");
-    await wait(host,"location.pathname.startsWith('/manage/')","listing published");
+    await wait(host,"location.pathname.startsWith('/manage/')","listing published",480);
+
+    if(manyPhotos) assert.equal(await evaluate(host,"Number(sessionStorage.getItem('qaPhotoRequests'))"),16,"Retry reuses the first two completed uploads");
+    if(manyPhotos) console.log(`CHECK final publish request ${await evaluate(host,"sessionStorage.getItem('qaPublishDuration')")} ms after photo uploads`);
     const listing = await db.listing.findFirstOrThrow({where:{title},include:{photos:true}});
+    assert.equal(listing.photos.length,photoCount,"All selected photos are attached to the listing");
     ownerListingId=listing.id;
     ownerPhotoUrls.push(...listing.photos.map(photo=>photo.url));
     const photoStatus=await evaluate(host,`fetch(${JSON.stringify(listing.photos[0].url)}).then(r=>r.status)`);
@@ -156,4 +173,4 @@ try {
   console.log(`PASS all smoke checks. Screenshots saved to ${output}`);
   }
 } catch(error){console.error(`FAIL ${error.message}`);process.exitCode=1;}
-finally{if(roomId)await db.escapeRoom.deleteMany({where:{id:roomId}});if(ownerListingId)await db.listing.deleteMany({where:{id:ownerListingId}});if(ownerPhotoUrls.length)await deletePhotoObjects(db,createStorageClient().from(storageBucket()),ownerPhotoUrls);await db.$disconnect();if(socket?.readyState===1)socket.close();chrome.kill();}
+finally{if(!ownerListingId&&ownerTitle){const leftover=await db.listing.findFirst({where:{title:{in:[ownerTitle,`${ownerTitle} updated`]},landlordEmail:"qa@example.test"},include:{photos:true}});if(leftover){ownerListingId=leftover.id;ownerPhotoUrls.push(...leftover.photos.map(photo=>photo.url));}}if(roomId)await db.escapeRoom.deleteMany({where:{id:roomId}});if(ownerListingId)await db.listing.deleteMany({where:{id:ownerListingId}});if(ownerPhotoUrls.length)await deletePhotoObjects(db,createStorageClient().from(storageBucket()),ownerPhotoUrls);await db.$disconnect();if(socket?.readyState===1)socket.close();chrome.kill();}

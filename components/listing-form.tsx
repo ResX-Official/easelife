@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { startTransition, useRef, useState } from "react";
 import { PROPERTY_TYPES, CURRENCIES, PAYMENT_FREQUENCIES } from "@/lib/constants";
 import {
   LISTING_CATEGORIES,
@@ -9,7 +9,9 @@ import {
 } from "@/lib/listing-category";
 import type { ActionState } from "@/lib/actions";
 import { PhotoPicker } from "@/components/photo-picker";
-import { MAX_UPLOAD_BYTES as MAX_TOTAL_BYTES } from "@/lib/upload-policy";
+import { createPhotoUploadQueue } from "@/lib/upload-queue";
+import type { PhotoTicket } from "@/lib/photo-tickets";
+import { MAX_PHOTO_BYTES } from "@/lib/upload-policy";
 import { CustomDropdown } from "@/components/custom-dropdown";
 
 type ListingFormValues = {
@@ -67,42 +69,116 @@ export function ListingForm({
   existingPhotos?: { id: string; url: string }[];
   photosRequired?: boolean;
 }) {
-  const [state, formAction, pending] = useActionState(action, {});
+  const [state, setState] = useState<ActionState>({});
+  const [pending, setPending] = useState(false);
+  const [preparingPhotos, setPreparingPhotos] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+  const submitted = useRef(false);
+  const [uploadProgress, setUploadProgress] = useState({ complete: 0, total: 0 });
+  const selectionVersion = useRef(0);
+  const [uploads] = useState(() => createPhotoUploadQueue(async photo => {
+    const body = new FormData();
+    body.set("photo", photo);
+    const response = await fetch("/api/photos", { method: "POST", body });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result?.ticket) throw new Error(result?.error || (response.status === 413 ? "This photo is too large. Please choose a smaller copy." : "A photo could not be uploaded. Please try again."));
+    return result.ticket as PhotoTicket;
+  }));
   const [photos, setPhotos] = useState<File[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [listingCategory, setListingCategory] = useState<ListingCategory>(defaultValues.listingCategory);
   const [paymentFrequency, setPaymentFrequency] = useState(defaultValues.paymentFrequency);
   const [propertyType, setPropertyType] = useState(defaultValues.propertyType);
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  function selectPhotos(files: File[]) {
+    setPhotos(files);
+    setPhotoError(null);
+    const version = ++selectionVersion.current;
+    setUploadProgress({ complete: 0, total: files.length });
+    let complete = 0;
+    for (const file of files) {
+      if (file.size > MAX_PHOTO_BYTES) continue;
+      void uploads.get(file).then(() => {
+        complete++;
+        if (selectionVersion.current === version) setUploadProgress({ complete, total: files.length });
+      }).catch(() => {
+        if (selectionVersion.current === version) setPhotoError("Some photos couldn't upload yet. Click publish to retry; your details are safe.");
+      });
+    }
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submitted.current || preparingPhotos) return;
     if (photosRequired && existingPhotos.length === 0 && photos.length === 0) {
-      event.preventDefault();
       setPhotoError("Please add at least one photo of the property.");
       return;
     }
-    if (photos.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_BYTES) {
-      event.preventDefault();
-      setPhotoError(
-        "Those photos are too large to upload at once — remove a few."
-      );
+    if (photos.some(photo => photo.size > MAX_PHOTO_BYTES)) {
+      setPhotoError("Each photo must be 3 MB or smaller. Please choose a smaller copy of the large photo.");
       return;
     }
+    const data = new FormData(event.currentTarget);
+    data.delete("photos");
+    submitted.current = true;
+    setPending(true);
+    setState({});
     setPhotoError(null);
+    setProgress("Preparing your listing...");
+    let navigating = false;
+    try {
+      let complete = 0;
+      const tickets = await Promise.all(photos.map(async photo => {
+        const ticket = await uploads.get(photo);
+        complete++;
+        setUploadProgress({ complete, total: photos.length });
+        setProgress(`Uploading photos ${complete} of ${photos.length}...`);
+        return ticket;
+      }));
+      data.set("photoTickets", JSON.stringify(tickets));
+      setProgress("Saving listing...");
+      let result: ActionState | null;
+      if (photosRequired) {
+        const response = await fetch("/api/listings", { method: "POST", body: data });
+        result = await response.json().catch(() => null) as ActionState | null;
+      } else {
+        result = await new Promise<ActionState>((resolve, reject) => {
+          startTransition(async () => {
+            try { resolve(await action({}, data)); } catch (error) { reject(error); }
+          });
+        });
+      }
+      if (!result) throw new Error("The listing couldn't be saved. Your details are still here. Please try again.");
+      if (result?.redirectTo) {
+        navigating = true;
+        setProgress("Opening your listing...");
+        window.location.assign(result.redirectTo);
+        return;
+      }
+      if (result) setState(result);
+    } catch (error) {
+      setState({ error: error instanceof Error && !error.message.startsWith("An error occurred in the Server Components") ? error.message : "The listing couldn't be saved. Your details are still here. Please try again." });
+    } finally {
+      if (!navigating) {
+        submitted.current = false;
+        setPending(false);
+        setProgress(null);
+      }
+    }
   }
 
   return (
     <form
-      action={formAction}
       onSubmit={handleSubmit}
       className="flex flex-col gap-7 sm:gap-8"
     >
       {(state.error || photoError) && (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {state.error ?? photoError}
         </p>
       )}
 
-      <fieldset className="flex flex-col gap-4">
+      <fieldset disabled={pending} className="flex flex-col gap-4">
         <legend className="mb-1 text-base font-semibold text-blue-950 sm:text-lg">
           {listingCategory === "staycation"
             ? "Staycation details"
@@ -278,7 +354,7 @@ export function ListingForm({
         </div>
       </fieldset>
 
-      <fieldset className="flex flex-col gap-4">
+      <fieldset disabled={pending} className="flex flex-col gap-4">
         <legend className="mb-1 text-base font-semibold text-blue-950 sm:text-lg">
           {listingCategory === "staycation"
             ? "Destination"
@@ -334,7 +410,7 @@ export function ListingForm({
         </div>
       </fieldset>
 
-      {listingCategory !== "sale" && <fieldset className="flex flex-col gap-4">
+      {listingCategory !== "sale" && <fieldset disabled={pending} className="flex flex-col gap-4">
         <legend className="text-base font-semibold text-blue-950">Made for your guests</legend>
         <p className="text-sm text-slate-500">Daily and per-stay listings can appear in Escape Match. Monthly rates remain available in the catalogue.</p>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -343,23 +419,23 @@ export function ListingForm({
         </div>
       </fieldset>}
 
-      <fieldset className="flex flex-col gap-4">
+      <fieldset disabled={pending} className="flex flex-col gap-4">
         <legend className="mb-1 text-base font-semibold text-blue-950 sm:text-lg">
           Photos
         </legend>
         <PhotoPicker
-          onChange={(files) => {
-            setPhotos(files);
-            setPhotoError(null);
-          }}
+          onChange={selectPhotos}
           existingPhotos={existingPhotos}
+          disabled={pending || preparingPhotos}
+          onBusyChange={setPreparingPhotos}
           label={
             existingPhotos.length > 0 ? "Add more photos" : "Choose photos"
           }
         />
+        {uploadProgress.total > 0 && <p role="status" className="text-sm text-slate-500">{uploadProgress.complete === uploadProgress.total ? "Photos ready" : `Uploading photos ${uploadProgress.complete} of ${uploadProgress.total}...`}</p>}
       </fieldset>
 
-      <fieldset className="flex flex-col gap-4">
+      <fieldset disabled={pending} className="flex flex-col gap-4">
         <legend className="mb-1 text-base font-semibold text-blue-950 sm:text-lg">
           Your contact details
         </legend>
@@ -412,12 +488,13 @@ export function ListingForm({
         </div>
       </fieldset>
 
+      {state.success && <p role="status" className="text-sm text-green-700">Your changes have been saved.</p>}
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || preparingPhotos}
         className="flex h-12 w-full items-center justify-center rounded-full bg-blue-900 text-base font-medium text-white shadow-lg shadow-blue-900/20 transition-colors hover:bg-blue-800 disabled:opacity-60 sm:w-fit sm:px-8"
       >
-        {pending ? "Saving..." : submitLabel}
+        {pending ? progress || "Saving..." : preparingPhotos ? "Preparing photos..." : submitLabel}
       </button>
     </form>
   );

@@ -1,3 +1,5 @@
+import { claimPhotos } from "./claim-photos.ts";
+import type { PhotoTicket } from "./photo-tickets.ts";
 import { MAX_PHOTOS, UploadError } from "./upload-policy.ts";
 import { Prisma, type PrismaClient } from "@prisma/client";
 
@@ -17,6 +19,7 @@ export async function updateOwnedListing(
   token: string,
   fields: Prisma.ListingUpdateInput,
   photoUrls: string[],
+  tickets: PhotoTicket[] = [],
 ) {
   return store.$transaction(async (db) => {
     await db.$queryRaw`SELECT "id" FROM "easelife"."Listing" WHERE "id" = ${id} AND "managementToken" = ${token} FOR UPDATE`;
@@ -25,13 +28,14 @@ export async function updateOwnedListing(
       include: { _count: { select: { photos: true } } },
     });
     if (!listing) throw new Error("Listing not found.");
-    if (listing._count.photos + photoUrls.length > MAX_PHOTOS) throw new UploadError(`A listing can have up to ${MAX_PHOTOS} photos.`);
+    if (listing._count.photos + photoUrls.length + tickets.length > MAX_PHOTOS) throw new UploadError(`A listing can have up to ${MAX_PHOTOS} photos.`);
+    const claimed = await claimPhotos(db, tickets);
     return db.listing.update({
       where: { id, managementToken: token },
       data: {
         ...fields,
         photos: {
-          create: photoUrls.map((url, index) => ({ url, order: listing._count.photos + index })),
+          create: [...photoUrls, ...claimed].map((url, index) => ({ url, order: listing._count.photos + index })),
         },
       },
     });
