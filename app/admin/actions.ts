@@ -3,6 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { finishListingDeletion } from "@/lib/finish-listing-deletion";
+import { queuePhotoDeletion } from "@/lib/photo-deletion";
 import { deleteListingsWithPhotos } from "@/lib/listing-access";
 import { requestLimit } from "@/lib/request-limit";
 import { savePhotos, deletePhotos } from "@/lib/uploads";
@@ -38,14 +40,16 @@ export async function logoutAdmin() {
 }
 
 export async function deleteAdminListing(formData: FormData) {
-  if (!(await isAdminAuthenticated())) throw new Error("Unauthorized.");
-  const id = String(formData.get("listingId") ?? "");
-  if (!id) throw new Error("Choose a listing to delete.");
-  const photoUrls = await deleteListingsWithPhotos(prisma, { id });
-  await deletePhotos(photoUrls);
-  revalidatePath("/admin");
-  revalidatePath("/listings");
-  revalidatePath("/");
+  try {
+    if (!(await isAdminAuthenticated())) return { error: "Please sign in again before deleting this listing." };
+    const id = String(formData.get("listingId") ?? "");
+    if (!id) return { error: "Choose a listing to delete." };
+    const photoUrls = await deleteListingsWithPhotos(prisma, { id });
+    finishListingDeletion(photoUrls);
+    return { success: true };
+  } catch {
+    return { error: "We couldn't delete this listing. Please try again." };
+  }
 }
 
 export async function clearAdminData(formData: FormData) {
@@ -55,15 +59,13 @@ export async function clearAdminData(formData: FormData) {
   }
   const photoUrls = await prisma.$transaction(async db => {
     const photos = await db.photo.findMany({ select: { url: true } });
+    await queuePhotoDeletion(db, photos.map(photo => photo.url));
     await db.escapeRoom.deleteMany();
     await db.listing.deleteMany();
     await db.visitorEvent.deleteMany();
     return photos.map(photo => photo.url);
   });
-  await deletePhotos(photoUrls);
-  revalidatePath("/admin");
-  revalidatePath("/listings");
-  revalidatePath("/");
+  finishListingDeletion(photoUrls);
 }
 
 export async function updateSiteLogo(formData: FormData) {
@@ -96,7 +98,7 @@ export async function removeDemoListings(formData: FormData) {
   if (!(await isAdminAuthenticated())) throw new Error("Unauthorized.");
   if (String(formData.get("confirmation")) !== "REMOVE DEMOS") throw new Error("Type REMOVE DEMOS to confirm.");
   const photoUrls = await deleteListingsWithPhotos(prisma, { isDemo: true });
-  await deletePhotos(photoUrls);
+  finishListingDeletion(photoUrls);
   revalidatePath("/", "layout");
   redirect("/admin?tab=settings&notice=demo-removed");
 }

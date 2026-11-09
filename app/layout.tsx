@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
 import { VisitorTracker } from "@/components/visitor-tracker";
+import { loadSiteLogo } from "@/lib/site-logo";
 import { prisma } from "@/lib/prisma";
 import "./globals.css";
 
@@ -45,14 +46,14 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   await connection();
-  const logoSetting = await prisma.siteSetting.findUnique({ where: { key: "logoUrl" } });
+  const logoUrl = await loadSiteLogo(prisma);
   return (
     <html
       lang="en"
       className={`${brico.variable} ${instrument.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        <SiteHeader logoUrl={logoSetting?.value ?? null} />
+        <SiteHeader logoUrl={logoUrl} />
         <main className="flex flex-1 flex-col">{children}</main>
         <SiteFooter />
         <VisitorTracker />

@@ -77,7 +77,15 @@ Push the code, import the GitHub repo into Vercel, choose Next.js and Node.js 24
 
 On Vercel, `DIRECT_URL` is only needed if you intend to run migration commands there. Keep it in your local `.env` for the usual setup flow.
 
-Listings support up to 15 photos. The browser prepares them and starts uploads as soon as photos are selected, sending up to three at a time with a 3 MB limit per photo. It shows progress and keeps completed uploads for retry if a later photo fails. The final listing request contains the details and verified photo tickets, not the image files. Photos are attached together in one database transaction, and abandoned uploads are cleaned up after an hour. The server removes image metadata and limits photos to 20 megapixels before resizing them. Storage reservations and rate limits are kept in Postgres so they work across server instances. Deleted listing photos are removed from the bucket.
+You can add up to 15 photos to a listing, with a limit of 3 MB per photo. They start uploading when you pick them, so you can keep filling in the form. Up to three upload at a time. If one fails, click publish to retry without starting over.
+
+Listing details are saved as a draft in the same browser. If you come back, you can resume or discard them. Photos need to be added again. The draft is cleared after publishing.
+
+People can open all the photos on a listing, swipe on a phone, or use the arrow keys. Press Escape to close the gallery.
+
+Once the photos are ready, publishing saves the details and opens your management page. The server checks the images, removes their metadata, and saves the listing and its photos together. Unused uploads older than an hour are cleared during later uploads.
+
+Deleting a listing removes it from the site first. Its photos are marked for cleanup in the same database update, then removed from storage in the background. If storage is temporarily unavailable, cleanup is retried later. You don't have to wait for it to finish.
 
 After deploying, add a property and photo, send an enquiry, check the owner inbox, and test the admin login. Redeploy once and confirm the data is still there.
 

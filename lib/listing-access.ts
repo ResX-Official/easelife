@@ -1,3 +1,4 @@
+import { queuePhotoDeletion } from "./photo-deletion.ts";
 import { claimPhotos } from "./claim-photos.ts";
 import type { PhotoTicket } from "./photo-tickets.ts";
 import { MAX_PHOTOS, UploadError } from "./upload-policy.ts";
@@ -43,13 +44,19 @@ export async function updateOwnedListing(
 }
 
 export async function deleteOwnedListing(store: PrismaClient, id: string, token: string) {
+  if (!id || !token) throw new Error("Listing not found.");
   return store.$transaction(async (db) => {
     await db.$queryRaw`SELECT "id" FROM "easelife"."Listing" WHERE "id" = ${id} AND "managementToken" = ${token} FOR UPDATE`;
     const listing = await findOwnedListing(db, id, token);
-    if (!listing) throw new Error("Listing not found.");
+    if (!listing) {
+      if (await db.listing.findUnique({ where: { id }, select: { id: true } })) throw new Error("Listing not found.");
+      return [];
+    }
+    const urls = listing.photos.map(photo => photo.url);
+    await queuePhotoDeletion(db, urls);
     await db.listing.delete({ where: { id, managementToken: token } });
-    return listing.photos.map(photo => photo.url);
-  });
+    return urls;
+  }, { maxWait: 10000, timeout: 15000 });
 }
 
 export async function deleteListingsWithPhotos(store: PrismaClient, where: Prisma.ListingWhereInput) {
@@ -59,7 +66,9 @@ export async function deleteListingsWithPhotos(store: PrismaClient, where: Prism
     if (ids.length === 0) return [];
     await db.$queryRaw(Prisma.sql`SELECT "id" FROM "easelife"."Listing" WHERE "id" IN (${Prisma.join(ids)}) ORDER BY "id" FOR UPDATE`);
     const photos = await db.photo.findMany({ where: { listingId: { in: ids } }, select: { url: true } });
+    const urls = photos.map(photo => photo.url);
+    await queuePhotoDeletion(db, urls);
     await db.listing.deleteMany({ where: { id: { in: ids } } });
-    return photos.map(photo => photo.url);
-  });
+    return urls;
+  }, { maxWait: 10000, timeout: 15000 });
 }

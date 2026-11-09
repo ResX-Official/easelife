@@ -3,6 +3,7 @@
 import { verifyPhotoTickets } from "@/lib/photo-tickets";
 import { publishListing } from "@/lib/publish-listing";
 import { redirect } from "next/navigation";
+import { finishListingDeletion } from "@/lib/finish-listing-deletion";
 import { revalidatePath } from "next/cache";
 import { findOwnedListing, updateOwnedListing, deleteOwnedListing } from "@/lib/listing-access";
 import { prisma } from "@/lib/prisma";
@@ -56,12 +57,13 @@ export async function updateListing(
   return { success: true };
 }
 
-export async function deleteListing(id: string, token: string) {
-  const photoUrls = await deleteOwnedListing(prisma, id, token);
-  await deletePhotos(photoUrls);
-
-  revalidatePath("/listings");
-  revalidatePath("/");
+export async function deleteListing(id: string, token: string): Promise<ActionState> {
+  try {
+    const photoUrls = await deleteOwnedListing(prisma, id, token);
+    finishListingDeletion(photoUrls);
+  } catch {
+    return { error: "We couldn't delete this listing. Please try again." };
+  }
   redirect("/my-listings");
 }
 

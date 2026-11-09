@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { PROPERTY_TYPES, CURRENCIES, PAYMENT_FREQUENCIES } from "@/lib/constants";
 import {
   LISTING_CATEGORIES,
@@ -56,14 +56,16 @@ const inputClass =
   "w-full min-w-0 rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-base text-zinc-900 outline-none transition-shadow focus:border-blue-400 focus:ring-4 focus:ring-blue-100 sm:py-2 sm:text-sm";
 const labelClass = "text-sm font-medium text-zinc-800";
 
-export function ListingForm({
+function ListingFormFields({
   action,
   submitLabel,
   defaultValues = emptyValues,
   existingPhotos = [],
   photosRequired = true,
+  onPublished,
 }: {
   action: (state: ActionState, formData: FormData) => Promise<ActionState>;
+  onPublished?: () => void;
   submitLabel: string;
   defaultValues?: ListingFormValues;
   existingPhotos?: { id: string; url: string }[];
@@ -150,6 +152,7 @@ export function ListingForm({
       }
       if (!result) throw new Error("The listing couldn't be saved. Your details are still here. Please try again.");
       if (result?.redirectTo) {
+        onPublished?.();
         navigating = true;
         setProgress("Opening your listing...");
         window.location.assign(result.redirectTo);
@@ -498,4 +501,81 @@ export function ListingForm({
       </button>
     </form>
   );
+}
+
+const draftKey = "easelife:listing-draft:v1";
+const draftFields = [...Object.keys(emptyValues), "maxGuests", "vibe"];
+
+type FormProps = Parameters<typeof ListingFormFields>[0];
+
+export function ListingForm(props: FormProps) {
+  const root = useRef<HTMLDivElement>(null);
+  const [draft, setDraft] = useState<ListingFormValues | null>(null);
+  const [values, setValues] = useState<ListingFormValues | undefined>(props.defaultValues);
+  const [revision, setRevision] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [notice, setNotice] = useState("");
+  const enabled = props.photosRequired !== false;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const published = useRef(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    Promise.resolve().then(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(draftKey) || "null");
+        if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+          const clean = Object.fromEntries(draftFields.filter(key => typeof saved[key] === "string" && saved[key].length <= 20000).map(key => [key, saved[key]]));
+          if (["rent", "sale", "staycation"].includes(clean.listingCategory)) {
+            setDraft({ ...emptyValues, ...clean } as ListingFormValues);
+            return;
+          }
+        }
+        setReady(true);
+      } catch {
+        setReady(true);
+        setNotice("Draft saving is unavailable in this browser. Keep this page open until you publish.");
+      }
+    });
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [enabled]);
+
+  function saveDraft() {
+    if (!enabled || !ready || published.current) return;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const form = root.current?.querySelector("form");
+      if (!form || form.querySelector("fieldset:disabled")) return;
+      const data = new FormData(form);
+      const saved = Object.fromEntries(draftFields.map(key => [key, data.get(key)]).filter(([, value]) => typeof value === "string"));
+      if (!Object.entries(saved).some(([key, value]) => !["listingCategory", "currency", "paymentFrequency"].includes(key) && value)) return;
+      try {
+        localStorage.setItem(draftKey, JSON.stringify(saved));
+        setNotice("Draft saved in this browser. Add your photos again if you leave this page.");
+      } catch {
+        setNotice("Your draft couldn't be saved. Keep this page open until you publish.");
+      }
+    }, 0);
+  }
+
+  function clearDraft() {
+    if (timer.current) clearTimeout(timer.current);
+    try { localStorage.removeItem(draftKey); } catch {}
+    setDraft(null);
+    setNotice("");
+  }
+
+  return <div ref={root} onInput={saveDraft} onClick={saveDraft}>
+    {enabled && draft && <div className="mb-6 rounded-xl border border-blue-200 bg-blue-50 p-4">
+      <p className="text-sm text-blue-950">You have a saved draft. Would you like to carry on? You’ll need to add your photos again.</p>
+      <div className="mt-3 flex gap-3">
+        <button type="button" className="button-primary" onClick={() => { setValues(draft); setRevision(value => value + 1); setDraft(null); setReady(true); setNotice("Draft restored. Add your photos when you're ready."); }}>Resume draft</button>
+        <button type="button" className="button-secondary" onClick={() => { clearDraft(); setReady(true); }}>Discard draft</button>
+      </div>
+    </div>}
+    {enabled && <p role="status" className="mb-5 text-sm text-slate-500">{notice || "Your details are saved in this browser as you fill them in."}</p>}
+    <div inert={enabled && (!ready || !!draft)} className={enabled && draft ? "opacity-50" : undefined}>
+      <ListingFormFields key={revision} {...props} defaultValues={values} onPublished={() => { published.current = true; clearDraft(); props.onPublished?.(); }} />
+    </div>
+  </div>;
 }
