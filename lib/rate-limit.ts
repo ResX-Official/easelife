@@ -30,5 +30,9 @@ export async function consumeRateLimit(
     RETURNING "count"
   `;
   await store.$executeRaw`DELETE FROM "easelife"."RequestLimit" WHERE "expiresAt" <= ${now}`;
-  return { allowed: rows.length > 0, retryAfter: Math.max(1, expiresAt - now) };
+  return { key, allowed: rows.length > 0, retryAfter: Math.max(1, expiresAt - now) };
+}
+
+export async function releaseRateLimit(store: RateLimitStore, key: string) {
+  await store.$executeRaw`UPDATE "easelife"."RequestLimit" SET "count" = GREATEST(0, "count" - 1) WHERE "key" = ${key}`;
 }

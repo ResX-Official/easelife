@@ -53,7 +53,24 @@ try {
   async function click(s,text){await evaluate(s,`(()=>{const el=[...document.querySelectorAll('button,a')].find(el=>el.textContent.trim()===${JSON.stringify(text)});if(!el)throw new Error('Missing action '+${JSON.stringify(text)});el.click();})()`);}
   async function screenshot(s,name,width=1440,height=1000){await cmd("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:false},s);await delay(900);const {data}=await cmd("Page.captureScreenshot",{format:"png",captureBeyondViewport:false},s);await writeFile(`${output}/${name}.png`,Buffer.from(data,"base64"));assert.ok(await evaluate(s,"document.documentElement.scrollWidth <= window.innerWidth"),`Horizontal overflow on ${name}`);}
   const host=await page();
-  if(process.argv.includes("--gallery-only")) {
+  if(process.argv.includes("--upload-recovery-only")) {
+    await go(host,"/list-property");
+    await interactive(host);
+    await fields(host,{title:"QA upload recovery",description:"Temporary upload recovery check.",price:"120000",bedrooms:"2",bathrooms:"2",city:"Lagos",state:"Lagos",address:"Test",landlordName:"QA",landlordEmail:"qa@example.test",landlordPhone:"08000000000"});
+    await evaluate(host,"document.querySelector('#propertyType').click()");
+    await click(host,"Apartment");
+    await evaluate(host,`(()=>{let calls=0;const original=window.fetch.bind(window);window.fetch=async(input,options)=>{if(input==='/api/photos'){window.qaUploadCalls=++calls;if(calls===3)return Response.json({error:'Temporary upload failure'},{status:503,headers:{'Retry-After':'1'}});return Response.json({ticket:{url:'/uploads/qa-'+calls+'.webp',signature:'test',expiresAt:Date.now()/1000+3600}});}if(input==='/api/listings')return Response.json({error:'QA reached final save'},{status:400});return original(input,options);};})()`);
+    await evaluate(host,`(async()=>{const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg'));const transfer=new DataTransfer();for(let i=0;i<15;i++)transfer.items.add(new File([blob],'qa-'+i+'.jpg',{type:'image/jpeg'}));const input=document.querySelector('[name=photos]');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await wait(host,"document.querySelector('[role=alert]')?.textContent.includes('Temporary upload failure')","recoverable upload error");
+    assert.equal(await evaluate(host,"window.qaUploadCalls"),3,"Queued requests stop after the failure");
+    assert.equal(await evaluate(host,"document.querySelector('[name=title]').value"),"QA upload recovery");
+    await delay(1200);
+    await evaluate(host,"document.querySelector('[name=title]').form.requestSubmit()");
+    await wait(host,"document.querySelector('[role=alert]')?.textContent.includes('QA reached final save')","retry reaches final save");
+    assert.equal(await evaluate(host,"window.qaUploadCalls"),16,"Retry preserves the first two completed uploads");
+    assert.ok(await evaluate(host,"document.body.innerText.includes('15 photos')"));
+    console.log("PASS 15-photo failure pauses queue, preserves details and photos, and resumes without repeating completed uploads");
+  } else if(process.argv.includes("--gallery-only")) {
     const listing = await db.listing.create({data:{title:"QA gallery",description:"Temporary gallery check",price:100,currency:"NGN",propertyType:"Apartment",bedrooms:2,bathrooms:1,city:"Lagos",state:"Lagos",address:"Test",landlordName:"QA",landlordEmail:"qa@example.test",landlordPhone:"08000000000",photos:{create:Array.from({length:15},(_,order)=>({url:"/file.svg",order}))}}});
     ownerListingId = listing.id;
     await go(host,`/listings/${listing.id}`);
@@ -133,9 +150,10 @@ try {
     await wait(host,`document.body.innerText.includes('${photoCount} photo') && !document.querySelector('button[type=submit]').disabled`,"photos prepared",240);
     if(manyPhotos) {
       assert.ok(await evaluate(host,"[...document.querySelector('input[name=photos]').files].reduce((sum,file)=>sum+file.size,0)>4.5*1024*1024"),"Regression selection exceeds the old single-request limit");
-      await wait(host,"document.querySelector('[role=alert]')?.textContent.includes('Some photos')","recoverable background upload error",240);
+      await wait(host,"document.querySelector('[role=alert]')?.textContent.includes('Temporary upload failure')","recoverable background upload error",240);
       assert.equal(await evaluate(host,"document.querySelector('input[name=title]').value"),title,"Upload failures preserve listing details");
       assert.ok(await evaluate(host,"document.body.innerText.includes('15 photos')"),"Upload failures preserve selected photos");
+      await delay(15500);
       console.log("PASS background upload failure preserves the form and allows retry");
     }
     await evaluate(host,"document.querySelector('input[name=title]').form.requestSubmit()");

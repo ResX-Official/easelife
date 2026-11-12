@@ -53,3 +53,18 @@ test("owner access rejects another listing's token and protects updates", databa
     await close();
   }
 });
+
+test("server failure refunds only its original rate-limit window", databaseTest, async () => {
+  const { releaseRateLimit } = await import("../lib/rate-limit.ts");
+  const { db, close } = await testDatabase();
+  try {
+    const first = await consumeRateLimit(db, "photo-upload", "192.0.2.1", 1, 60, 100);
+    assert.equal((await consumeRateLimit(db, "photo-upload", "192.0.2.1", 1, 60, 100)).allowed, false);
+    await releaseRateLimit(db, first.key);
+    assert.equal((await consumeRateLimit(db, "photo-upload", "192.0.2.1", 1, 60, 100)).allowed, true);
+    const next = await consumeRateLimit(db, "photo-upload", "192.0.2.1", 1, 60, 120);
+    await releaseRateLimit(db, first.key);
+    assert.equal((await consumeRateLimit(db, "photo-upload", "192.0.2.1", 1, 60, 120)).allowed, false);
+    assert.notEqual(first.key, next.key);
+  } finally { await close(); }
+});

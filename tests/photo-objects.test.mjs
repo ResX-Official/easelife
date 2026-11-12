@@ -94,3 +94,16 @@ test("failed deletion is kept for retry without freeing storage too early", data
     await close();
   }
 });
+
+test("unavailable old-photo cleanup does not block new uploads or release reserved quota", databaseTest, async () => {
+  const { db, close } = await testDatabase();
+  const bucket = storage({ failRemove: true });
+  try {
+    await db.storedPhoto.create({ data: { filename: "old.webp", size: 6, status: "deleting" } });
+    const urls = await savePhotoObjects(db, bucket, [Buffer.alloc(4)], 10, "staged");
+    assert.equal(urls.length, 1);
+    assert.equal((await db.storedPhoto.aggregate({ _sum: { size: true } }))._sum.size, 10);
+    assert.equal((await db.storedPhoto.findUniqueOrThrow({ where: { filename: "old.webp" } })).status, "deleting");
+    await assert.rejects(savePhotoObjects(db, bucket, [Buffer.alloc(1)], 10), /storage is full/);
+  } finally { await close(); }
+});

@@ -9,7 +9,7 @@ import {
 } from "@/lib/listing-category";
 import type { ActionState } from "@/lib/actions";
 import { PhotoPicker } from "@/components/photo-picker";
-import { createPhotoUploadQueue } from "@/lib/upload-queue";
+import { createPhotoUploadQueue, PhotoUploadError } from "@/lib/upload-queue";
 import type { PhotoTicket } from "@/lib/photo-tickets";
 import { MAX_PHOTO_BYTES } from "@/lib/upload-policy";
 import { CustomDropdown } from "@/components/custom-dropdown";
@@ -81,9 +81,14 @@ function ListingFormFields({
   const [uploads] = useState(() => createPhotoUploadQueue(async photo => {
     const body = new FormData();
     body.set("photo", photo);
-    const response = await fetch("/api/photos", { method: "POST", body });
+    let response: Response;
+    try { response = await fetch("/api/photos", { method: "POST", body }); }
+    catch { throw new PhotoUploadError("The connection was interrupted. Wait a few seconds, then click publish to retry.", 10); }
     const result = await response.json().catch(() => null);
-    if (!response.ok || !result?.ticket) throw new Error(result?.error || (response.status === 413 ? "This photo is too large. Please choose a smaller copy." : "A photo could not be uploaded. Please try again."));
+    if (!response.ok || !result?.ticket) {
+      const retryAfter = response.status === 429 || response.status >= 500 ? Math.min(3600, Math.max(1, Number(response.headers.get("Retry-After")) || 15)) : 0;
+      throw new PhotoUploadError(result?.error || (response.status === 413 ? "This photo is too large. Please choose a smaller copy." : "A photo could not be uploaded. Wait a few seconds, then try again."), retryAfter);
+    }
     return result.ticket as PhotoTicket;
   }));
   const [photos, setPhotos] = useState<File[]>([]);
@@ -103,8 +108,8 @@ function ListingFormFields({
       void uploads.get(file).then(() => {
         complete++;
         if (selectionVersion.current === version) setUploadProgress({ complete, total: files.length });
-      }).catch(() => {
-        if (selectionVersion.current === version) setPhotoError("Some photos couldn't upload yet. Click publish to retry; your details are safe.");
+      }).catch((error: unknown) => {
+        if (selectionVersion.current === version) setPhotoError(error instanceof Error ? error.message : "Some photos couldn't upload yet. Click publish to retry; your details are safe.");
       });
     }
   }

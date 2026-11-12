@@ -37,3 +37,27 @@ test("pending uploads are shared and failed photos can be retried", async () => 
   await queue.get(file);
   assert.equal(calls, 2);
 });
+
+test("a rate-limited upload stops queued photos without discarding completed work", async context => {
+  let now = Date.now();
+  context.mock.method(Date, "now", () => now);
+  const { PhotoUploadError } = await import("../lib/upload-queue.ts");
+  let calls = 0;
+  const queue = createPhotoUploadQueue(async file => {
+    calls++;
+    if (file.name === "limited") throw new PhotoUploadError("Wait before retrying", 60);
+    return ticket(file.name);
+  }, 1);
+  const saved = new File(["photo"], "saved");
+  await queue.get(saved);
+  const files = [new File(["photo"], "limited"), ...Array.from({ length: 14 }, (_, i) => new File(["photo"], `waiting-${i}`))];
+  const results = await Promise.allSettled(files.map(file => queue.get(file)));
+  assert.ok(results.every(result => result.status === "rejected"));
+  assert.equal(calls, 2);
+  await queue.get(saved);
+  await assert.rejects(queue.get(files[1]), /Wait before retrying/);
+  assert.equal(calls, 2);
+  now += 61000;
+  await queue.get(files[1]);
+  assert.equal(calls, 3);
+});

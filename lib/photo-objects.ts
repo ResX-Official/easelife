@@ -29,7 +29,11 @@ export async function cleanupPendingPhotos(db: PrismaClient, bucket: Bucket) {
 export async function savePhotoObjects(db: PrismaClient, bucket: Bucket, images: Buffer[], quotaBytes: number, status: "ready" | "staged" = "ready") {
   if (!Number.isSafeInteger(quotaBytes) || quotaBytes <= 0) throw new Error("Photo storage quota must be a positive whole number of bytes.");
   if (images.length === 0) return [];
-  await cleanupPendingPhotos(db, bucket);
+  try {
+    await cleanupPendingPhotos(db, bucket);
+  } catch {
+    console.error("Photo cleanup deferred; reserved storage is still counted.");
+  }
   const assets = images.map(image => ({ filename: `${randomUUID()}.webp`, size: image.length }));
   await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(68094021)`;
@@ -46,7 +50,11 @@ export async function savePhotoObjects(db: PrismaClient, bucket: Bucket, images:
         cacheControl: "31536000",
         upsert: false,
       });
-      if (error) throw new UploadError("The photos could not be uploaded. Please try again.");
+      if (error) {
+        const status = error && typeof error === "object" && "statusCode" in error ? String(error.statusCode) : "unknown";
+        console.error("Photo storage upload failed", { status });
+        throw new Error("Photo storage is temporarily unavailable.");
+      }
     }
     await db.storedPhoto.updateMany({ where: { filename: { in: assets.map(asset => asset.filename) } }, data: { status } });
     return urls;
@@ -54,7 +62,7 @@ export async function savePhotoObjects(db: PrismaClient, bucket: Bucket, images:
     try {
       await deletePhotoObjects(db, bucket, urls);
     } catch {
-      throw new UploadError("The upload did not finish. Cleanup will be retried with a later upload.");
+      throw new Error("Photo upload failed and cleanup is queued for retry.");
     }
     throw error;
   }
